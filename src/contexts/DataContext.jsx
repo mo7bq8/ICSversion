@@ -103,7 +103,7 @@ export const DataProvider = ({ children }) => {
     console.error('ICS Aggregation Failed:', e);
     toast({ title: 'ICS Aggregation Failed', description: e.message || 'Unexpected error', variant: 'destructive' });
   }
-}, [toast]);, [toast]);
+  }, [toast]);
 
   useEffect(() => {
     const loadData = () => {
