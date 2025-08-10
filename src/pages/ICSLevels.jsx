@@ -53,6 +53,12 @@ const ICSLevels = () => {
   const [editingNote, setEditingNote] = useState(null);
 
   useEffect(() => {
+    if (!aggregatedIcsComponents || aggregatedIcsComponents.length === 0) {
+      refreshAggregatedIcsData();
+    }
+  }, [aggregatedIcsComponents, refreshAggregatedIcsData]);
+
+  useEffect(() => {
     setSyncStatus(getAggregatorSyncStatus(aggregatedIcsComponents));
   }, [aggregatedIcsComponents]);
 
