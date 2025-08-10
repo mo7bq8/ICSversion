@@ -237,94 +237,139 @@ const normalize = (value, fallback = 'N/A') => value || fallback;
 export const runIcsAggregation = (allData, rules, zones) => {
   const components = [];
   const edges = [];
-  
-  const zoneMap = new Map(zones.map(z => [z.name, z.id]));
 
-  const sources = {
-    Applications: allData.applications,
-    Technologies: allData.technologies,
-    Infrastructure: allData.infrastructure,
-    Security: allData.securityControls,
-    Network: allData.networkComponents,
-    Data: allData.dataDictionary,
+  const zoneSet = new Set((zones || []).map(z => z.name));
+  const canon = {
+    domain: v => (v || '').trim(),
+    zone: v => {
+      const z = (v || '').trim();
+      return zoneSet.has(z) ? z : z;
+    },
+    role: v => (v || '').toString().trim().toLowerCase(),
+    vendor: v => (v || '').trim() || null,
+    name: v => (v || '').toString().trim(),
   };
 
-  const sortedRules = rules.filter(r => r.is_enabled).sort((a, b) => a.priority - b.priority);
+  const mkId = (st, raw) => `${st.slice(0,4)}-${String(raw)}`;
+  const nowIso = () => new Date().toISOString();
+  const asNum = (n) => (n === null || n === undefined || n === '' ? null : Number(n));
+
+  const sources = {
+    Applications: allData.applications || [],
+    Technologies: allData.technologies || [],
+    Infrastructure: allData.infrastructure || [],
+    Security: allData.securityControls || [],
+    Network: allData.networkComponents || [],
+    Data: allData.dataDictionary || [],
+  };
+
+  const sortedRules = (rules || []).filter(r => r.is_enabled !== false).sort((a,b) => (a.priority||0) - (b.priority||0));
+
+  const checkCond = (val, op, exp) => {
+    if (val === undefined || val === null) return false;
+    const v = String(val).toLowerCase();
+    const e = String(exp).toLowerCase();
+    switch (op) {
+      case 'equals': return v === e;
+      case 'contains': return v.includes(e);
+      case 'in': {
+        const arr = e.split(',').map(s => s.trim().toLowerCase());
+        return arr.includes(v);
+      }
+      default: return false;
+    }
+  };
+
+  const applyRules = (record) => {
+    for (const rule of sortedRules) {
+      const ok = (rule.conditions || []).every(c => {
+        const field = c.field;
+        const value = record[field] ?? record.source_data?.[field];
+        return checkCond(value, c.operator, c.value);
+      });
+      if (ok) return asNum(rule.ics_level);
+    }
+    return null;
+  };
+
+  const fallbackLevel = (zone, role) => {
+    const z = (zone || '').toLowerCase();
+    const r = (role || '').toLowerCase();
+    if (z.startsWith('cloud:')) return 4;
+    if (z === 'dmz') return 3.5;
+    if (z.includes('ot data center') || z.includes('ot systems infrastructure')) return 3;
+    if (['scada','hmi'].includes(r)) return 2;
+    if (['plc','rtu','controller'].includes(r)) return 1;
+    if (['sensor','actuator'].includes(r)) return 0;
+    return null;
+  };
 
   Object.entries(sources).forEach(([sourceType, items]) => {
-    if (!items) return;
     items.forEach(item => {
-      let unclassifiedReason = 'No rule matched';
-      const component = {
-        id: `${sourceType.slice(0, 4)}-${item.id}`,
+      const domain = sourceType;
+      const zone = canon.zone(item.zone || item.zoneName || '');
+      const role = canon.role(item.role || item.type || item.category);
+      const vendor = canon.vendor(item.vendor);
+      const name = canon.name(item.name || item.title || `${sourceType} ${item.id}`);
+
+      const base = {
+        id: mkId(sourceType, item.id),
         source_type: sourceType,
         source_id: item.id,
-        name: normalize(item.name || item.entity),
-        type: normalize(item.type || item.component, 'Unknown Type'),
-        role: normalize(item.role || item.type, 'Unknown Role'),
-        domain: normalize(item.domain || item.category),
-        vendor: normalize(item.vendor),
-        tags: item.tags || [],
-        zone: normalize(item.zone, null),
-        ics_level: null,
-        unclassifiedReason,
+        name,
+        domain,
+        zone,
+        role,
+        vendor,
+        tags: Array.isArray(item.tags) ? item.tags : [],
+        status: item.status || null,
+        product: item.product || item.type || null,
+        version: item.version || null,
         source_data: item,
-        last_aggregated_at: new Date().toISOString(),
+        last_aggregated_at: nowIso(),
       };
-      
-      let assignedLevel = false;
-      for (const rule of sortedRules) {
-        if (rule.conditions.every(cond => checkCondition(item[cond.field], cond.operator, cond.value))) {
-          component.ics_level = rule.ics_level;
-          if (rule.zoneName && !component.zone) {
-            component.zone = rule.zoneName;
-          }
-          assignedLevel = true;
-          unclassifiedReason = null;
-          break;
-        }
-      }
 
-      if (!component.zone && component.ics_level === null) {
-          unclassifiedReason = "Missing zone and no rule match";
-      } else if (!component.zone) {
-          unclassifiedReason = "Missing zone";
-      }
+      let level = applyRules({ ...base, ...item });
+      if (level === null) level = fallbackLevel(base.zone, base.role);
 
-      if (assignedLevel) {
-          component.unclassifiedReason = null;
-      }
-      
-      component.zone_id = zoneMap.get(component.zone);
-      components.push(component);
+      components.push({ ...base, ics_level: level });
     });
   });
 
-  const componentMap = new Map(components.map(c => [c.id, c]));
-
-  allData.applications.forEach(app => {
-    if (app.dependencies && app.dependencies.length > 0) {
-      const fromId = `Appl-${app.id}`;
-      app.dependencies.forEach(depName => {
-        const dependentApp = allData.applications.find(a => a.name === depName);
-        if (dependentApp) {
-          const toId = `Appl-${dependentApp.id}`;
-          if (componentMap.has(fromId) && componentMap.has(toId)) {
-            edges.push({
-              id: `${fromId}-to-${toId}`,
-              from: fromId,
-              to: toId,
-              relation: 'depends on',
-              link_type: 'primary',
-            });
-          }
-        }
-      });
+  const pushEdge = (fromId, toId, label) => {
+    if (!fromId || !toId || fromId === toId) return;
+    const id = `${fromId}__${toId}`;
+    if (!edges.some(e => e.id === id)) {
+      edges.push({ id, from_id: fromId, to_id: toId, label: label || '' });
     }
+  };
+
+  (allData.relations || []).forEach(r => {
+    pushEdge(mkId(r.from_domain || 'Applications', r.from), mkId(r.to_domain || 'Technologies', r.to), r.type);
+  });
+  (allData.networkDependencies || []).forEach(d => {
+    pushEdge(mkId('Network', d.from), mkId('Network', d.to), d.protocol || d.method);
+  });
+  (allData.dataFlows || []).forEach(f => {
+    pushEdge(mkId('Applications', f.from), mkId('Applications', f.to), f.type || f.protocol);
   });
 
-  return { components, edges };
-};
+  const lastRun = components.reduce((acc, c) => {
+    const t = Date.parse(c.last_aggregated_at) || 0;
+    return t > acc ? t : acc;
+  }, 0);
+
+  return {
+    components,
+    edges,
+    status: {
+      lastRun: new Date(lastRun || Date.now()).toISOString(),
+      processed: components.length,
+      unclassified: components.filter(c => c.ics_level === null || c.ics_level === undefined).length,
+      errors: 0,
+    }
+  };
+};;
 
 export const getCapabilities = () => getInitialData('capabilities', []);
 export const getApplications = () => getInitialData('applications', []);

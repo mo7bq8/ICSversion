@@ -75,32 +75,35 @@ export const DataProvider = ({ children }) => {
   const [loading, setLoading] = useState(true);
 
   const refreshAggregatedIcsData = useCallback(() => {
-    toast({ title: 'ICS Aggregation Started', description: 'Collecting and processing data from all modules.' });
-    try {
-      const allData = {
-        applications: getApplications(),
-        technologies: getTechnologies(),
-        infrastructure: getInfrastructure(),
-        securityControls: getSecurityControls(),
-        networkComponents: getNetworkComponents(),
-        dataDictionary: getDataDictionary(),
-      };
-      const rules = getIcsLevelRules();
-      const zones = getIcsZones();
-      const { components, edges } = runIcsAggregation(allData, rules, zones);
-      
-      setAggregatedIcsComponents(components);
-      saveData('aggregatedIcsComponents', components);
-      
-      setAggregatedIcsEdges(edges);
-      saveData('aggregatedIcsEdges', edges);
+  try {
+    const allData = {
+      applications: getApplications(),
+      technologies: getTechnologies(),
+      infrastructure: getInfrastructure(),
+      securityControls: getSecurityControls(),
+      networkComponents: getNetworkComponents(),
+      dataDictionary: getDataDictionary(),
+      relations: getRelations(),
+      networkDependencies: getNetworkDependencies(),
+      dataFlows: getDataFlows(),
+    };
+    const rules = getIcsLevelRules();
+    const zones = getIcsZones();
 
-      toast({ title: 'ICS Aggregation Complete', description: 'Diagram data has been successfully updated.' });
-    } catch (error) {
-      console.error("ICS Aggregation Failed:", error);
-      toast({ title: 'ICS Aggregation Failed', description: 'An error occurred during data aggregation.', variant: 'destructive' });
-    }
-  }, [toast]);
+    const { components, edges, status } = runIcsAggregation(allData, rules, zones);
+
+    setAggregatedIcsComponents(components);
+    setAggregatedIcsEdges(edges);
+    saveData('aggregatedIcsComponents', components);
+    saveData('aggregatedIcsEdges', edges);
+    saveData('aggregatorStatus', status);
+
+    toast({ title: 'ICS Aggregation Complete', description: `${status.processed} processed, ${status.unclassified} unclassified.` });
+  } catch (e) {
+    console.error('ICS Aggregation Failed:', e);
+    toast({ title: 'ICS Aggregation Failed', description: e.message || 'Unexpected error', variant: 'destructive' });
+  }
+}, [toast]);, [toast]);
 
   useEffect(() => {
     const loadData = () => {

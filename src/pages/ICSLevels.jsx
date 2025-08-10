@@ -330,7 +330,12 @@ const ICSLevels = () => {
           </div>
         </div>
         <CardContent className="p-0 flex-grow relative">
-          <MemoizedICSDiagram 
+          {filteredData.nodes.length === 0 && (aggregatedIcsComponents?.length || 0) > 0 ? (
+  <div className="text-sm text-muted-foreground px-2 py-2">
+    No nodes match current filters. Click <strong>Clear Filters</strong> or enable <strong>Show Unclassified</strong>.
+  </div>
+) : null}
+<MemoizedICSDiagram 
             nodes={filteredData.nodes} 
             edges={filteredData.edges}
             notes={icsNotes}
